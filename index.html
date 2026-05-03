@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reverse-Action Workout Timer</title>
+    <style>
+        :root {
+            --bg: #121212;
+            --text: #ffffff;
+            --accent: #ffcc00;
+            --danger: #ff4444;
+            --surface: #1e1e1e;
+        }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            transition: background-color 0.1s;
+        }
+        .flash-white { background-color: #ffffff !important; }
+        .flash-red { background-color: var(--danger) !important; }
+        
+        #app {
+            width: 100%;
+            max-width: 500px;
+        }
+        .screen { display: none; width: 100%; }
+        .active-screen { display: block; }
+        
+        /* Setup Layout */
+        .form-group {
+            margin-bottom: 15px;
+            background: var(--surface);
+            padding: 15px;
+            border-radius: 8px;
+        }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="number"] {
+            width: 100%; padding: 10px; border-radius: 4px; border: 1px solid #333;
+            background: var(--bg); color: var(--text); font-size: 16px; box-sizing: border-box;
+        }
+        .toggle-group {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        button {
+            width: 100%; padding: 15px; background: var(--accent); color: #000;
+            border: none; border-radius: 8px; font-size: 18px; font-weight: bold;
+            cursor: pointer; margin-top: 10px; text-transform: uppercase;
+        }
+        button:active { opacity: 0.8; }
+        
+        /* Workout Layout */
+        .header-stats { display: flex; justify-content: space-between; font-size: 1.2rem; margin-bottom: 40px; color: #888;}
+        .countdown-display { text-align: center; font-size: 6rem; font-weight: bold; margin: 40px 0; font-variant-numeric: tabular-nums; line-height: 1.2;}
+        .btn-fail { background: var(--danger); color: white; height: 120px; font-size: 2rem; margin-top: auto; transition: opacity 0.2s;}
+        
+        /* Summary Layout */
+        textarea {
+            width: 100%; height: 350px; background: var(--surface); color: var(--text);
+            border: 1px solid #333; padding: 15px; font-family: monospace; font-size: 14px; 
+            border-radius: 4px; box-sizing: border-box; resize: none;
+        }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <div id="screen-setup" class="screen active-screen">
+        <h2>Reverse-Action Workout Timer</h2>
+        
+        <div class="form-group">
+            <label>Rep Cadence (Seconds)</label>
+            <input type="number" id="inp-cadence" value="3" min="2" max="10">
+        </div>
+        <div class="form-group">
+            <label>Rest Interval (Seconds)</label>
+            <input type="number" id="inp-rest" value="20" min="10" max="300">
+        </div>
+        <div class="form-group">
+            <label>Number of Sets</label>
+            <input type="number" id="inp-sets" value="4" min="1" max="20">
+        </div>
+        
+        <div class="form-group">
+            <div class="toggle-group"><label>Flash White (Eccentric)</label><input type="checkbox" id="tog-flash-rep" checked></div>
+            <div class="toggle-group"><label>Flash Red (Concentric)</label><input type="checkbox" id="tog-flash-wait" checked></div>
+            <div class="toggle-group"><label>High Beep (Eccentric)</label><input type="checkbox" id="tog-beep-rep" checked></div>
+            <div class="toggle-group"><label>Low Beep (Concentric)</label><input type="checkbox" id="tog-beep-wait" checked></div>
+        </div>
+
+        <button onclick="startWorkout()">Start Workout</button>
+    </div>
+
+    <div id="screen-workout" class="screen">
+        <div class="header-stats">
+            <div id="disp-set-time">0:00</div>
+            <div id="disp-rep-count">Rep: 0</div>
+            <div id="disp-set-count">Set: 1</div>
+        </div>
+        
+        <div class="countdown-display" id="disp-countdown">Eccentric!</div>
+        
+        <button class="btn-fail" id="btn-fail" onclick="requestFail()">FAIL</button>
+    </div>
+
+    <div id="screen-rest" class="screen">
+        <div class="header-stats">
+            <div>Resting</div>
+            <div id="disp-rest-set-count">Next: Set 2</div>
+        </div>
+        <div class="countdown-display" id="disp-rest-countdown">20</div>
+        <button id="btn-skip-rest" onclick="requestSkipRest()">Skip Rest</button>
+    </div>
+
+    <div id="screen-summary" class="screen">
+        <h2>Workout Complete</h2>
+        <textarea id="summary-text" readonly></textarea>
+        <button onclick="location.reload()">New Workout</button>
+    </div>
+</div>
+
+<script>
+    let audioCtx;
+    function playTone(frequency, duration, type='sine') {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        oscillator.type = type;
+        oscillator.frequency.value = frequency;
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        oscillator.start();
+        gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + duration);
+        oscillator.stop(audioCtx.currentTime + duration);
+    }
+
+    let state = { cadence: 3, rest: 20, totalSets: 4, flashRep: true, flashWait: true, beepRep: true, beepWait: true };
+    let timerInterval = null;
+    let globalTimeInterval = null;
+    let currentSet = 1;
+    let currentRep = 0;
+    let cadenceTimer = 0;
+    let totalTimeElapsed = 0;
+    let setTimeElapsed = 0;
+    let restTimer = 0;
+    let historyData = []; 
+    let pendingAction = null;
+
+    function showScreen(id) {
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active-screen'));
+        document.getElementById(id).classList.add('active-screen');
+    }
+
+    function formatTime(seconds) {
+        const m = Math.floor(seconds / 60);
+        const s = seconds % 60;
+        return `${m}:${s.toString().padStart(2, '0')}`;
+    }
+
+    function startWorkout() {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        audioCtx.resume();
+
+        state.cadence = parseInt(document.getElementById('inp-cadence').value, 10);
+        state.rest = parseInt(document.getElementById('inp-rest').value, 10);
+        state.totalSets = parseInt(document.getElementById('inp-sets').value, 10);
+        
+        state.flashRep = document.getElementById('tog-flash-rep').checked;
+        state.flashWait = document.getElementById('tog-flash-wait').checked;
+        state.beepRep = document.getElementById('tog-beep-rep').checked;
+        state.beepWait = document.getElementById('tog-beep-wait').checked;
+
+        totalTimeElapsed = 0;
+        clearInterval(globalTimeInterval);
+        globalTimeInterval = setInterval(() => {
+            totalTimeElapsed++;
+        }, 1000);
+
+        startSet();
+    }
+
+    function startSet() {
+        showScreen('screen-workout');
+        currentRep = 0;
+        cadenceTimer = state.cadence;
+        setTimeElapsed = 0;
+        pendingAction = null;
+        
+        document.getElementById('disp-set-count').innerText = `Set: ${currentSet} / ${state.totalSets}`;
+        document.getElementById('disp-set-time').innerText = formatTime(setTimeElapsed);
+        
+        const failBtn = document.getElementById('btn-fail');
+        failBtn.innerText = "FAIL";
+        failBtn.style.opacity = "1";
+        
+        updateWorkoutUI();
+
+        clearInterval(timerInterval);
+        timerInterval = setInterval(workoutTick, 1000);
+    }
+
+    function requestFail() {
+        pendingAction = 'fail';
+        const failBtn = document.getElementById('btn-fail');
+        failBtn.innerText = "SYNCING...";
+        failBtn.style.opacity = "0.6";
+    }
+
+    function workoutTick() {
+        if (pendingAction === 'fail') {
+            triggerFail();
+            return;
+        }
+
+        setTimeElapsed++;
+        document.getElementById('disp-set-time').innerText = formatTime(setTimeElapsed);
+        
+        cadenceTimer--;
+        
+        if (cadenceTimer === 0) {
+            currentRep++;
+            cadenceTimer = state.cadence;
+            if (state.beepRep) playTone(800, 0.1, 'square');
+            if (state.flashRep) triggerFlash('flash-white');
+        } else {
+            if (state.beepWait) playTone(400, 0.05, 'sine');
+            if (state.flashWait) triggerFlash('flash-red');
+        }
+        
+        updateWorkoutUI();
+    }
+
+    function triggerFlash(className) {
+        document.body.classList.add(className);
+        setTimeout(() => document.body.classList.remove(className), 150);
+    }
+
+    function updateWorkoutUI() {
+        if (cadenceTimer === state.cadence) {
+            document.getElementById('disp-countdown').innerText = "Eccentric!";
+        } else {
+            document.getElementById('disp-countdown').innerText = cadenceTimer;
+        }
+        document.getElementById('disp-rep-count').innerText = `Rep: ${currentRep}`;
+    }
+
+    function triggerFail() {
+        clearInterval(timerInterval);
+        
+        historyData.push({
+            setNum: currentSet,
+            reps: currentRep,
+            duration: setTimeElapsed,
+            restDuration: 0 
+        });
+
+        if (currentSet >= state.totalSets) {
+            endWorkout();
+        } else {
+            startRest();
+        }
+    }
+
+    function startRest() {
+        showScreen('screen-rest');
+        currentSet++;
+        restTimer = state.rest;
+        pendingAction = null;
+        
+        document.getElementById('disp-rest-set-count').innerText = `Next: Set ${currentSet}`;
+        document.getElementById('disp-rest-countdown').innerText = restTimer;
+        
+        const skipBtn = document.getElementById('btn-skip-rest');
+        skipBtn.innerText = "Skip Rest";
+        skipBtn.style.opacity = "1";
+
+        clearInterval(timerInterval);
+        timerInterval = setInterval(restTick, 1000);
+    }
+
+    function requestSkipRest() {
+        pendingAction = 'skipRest';
+        const skipBtn = document.getElementById('btn-skip-rest');
+        skipBtn.innerText = "SYNCING...";
+        skipBtn.style.opacity = "0.6";
+    }
+
+    function restTick() {
+        if (pendingAction === 'skipRest') {
+            finishRest(true);
+            return;
+        }
+
+        restTimer--;
+        document.getElementById('disp-rest-countdown').innerText = restTimer;
+        
+        if (restTimer <= 0) {
+            finishRest(false);
+        }
+    }
+
+    function finishRest(skipped = false) {
+        clearInterval(timerInterval);
+        const actualRestTime = skipped ? (state.rest - restTimer) : state.rest;
+        historyData[historyData.length - 1].restDuration = actualRestTime;
+        startSet();
+    }
+
+    function endWorkout() {
+        clearInterval(globalTimeInterval);
+        showScreen('screen-summary');
+        
+        let report = `Reverse-Action Workout Results\n`;
+        report += `Cadence: ${state.cadence}s\n`;
+        report += `Total Workout Time: ${formatTime(totalTimeElapsed)}\n`;
+        report += `========================\n`;
+        
+        historyData.forEach((set) => {
+            report += `Set ${set.setNum}:\n`;
+            report += `Reps: ${set.reps}\n`;
+            report += `Time: ${formatTime(set.duration)}\n`;
+            if (set.setNum < state.totalSets) {
+                report += `Rest: ${formatTime(set.restDuration)}\n`;
+            }
+            report += `------------------------\n`;
+        });
+
+        document.getElementById('summary-text').value = report;
+    }
+</script>
+</body>
+</html>
