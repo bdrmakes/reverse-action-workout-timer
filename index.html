@@ -75,6 +75,7 @@
             border: 1px solid #333; padding: 15px; font-family: monospace; font-size: 14px; 
             border-radius: 4px; box-sizing: border-box; resize: none;
         }
+        .prep-text { text-align: center; font-size: 2rem; margin-top: 40px; color: #888; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -83,6 +84,10 @@
     <div id="screen-setup" class="screen active-screen">
         <h2>Reverse-Action Workout Timer</h2>
         
+        <div class="form-group">
+            <label>Prep Time (Seconds)</label>
+            <input type="number" id="inp-prep" value="20" min="0" max="60">
+        </div>
         <div class="form-group">
             <label>Rep Cadence (Seconds)</label>
             <input type="number" id="inp-cadence" value="3" min="2" max="10">
@@ -104,6 +109,16 @@
         </div>
 
         <button onclick="startWorkout()">Start Workout</button>
+    </div>
+
+    <div id="screen-prep" class="screen">
+        <div class="header-stats">
+            <div>Get Ready!</div>
+            <div>Set 1</div>
+        </div>
+        <div class="prep-text">First eccentric in:</div>
+        <div class="countdown-display" id="disp-prep-countdown">20</div>
+        <button id="btn-skip-prep" onclick="skipPrep()">Skip Prep</button>
     </div>
 
     <div id="screen-workout" class="screen">
@@ -149,11 +164,12 @@
         oscillator.stop(audioCtx.currentTime + duration);
     }
 
-    let state = { cadence: 3, rest: 20, totalSets: 4, flashRep: true, flashWait: true, beepRep: true, beepWait: true };
+    let state = { prep: 20, cadence: 3, rest: 20, totalSets: 4, flashRep: true, flashWait: true, beepRep: true, beepWait: true };
     let timerInterval = null;
     let globalTimeInterval = null;
     let currentSet = 1;
     let currentRep = 0;
+    let prepTimer = 0;
     let cadenceTimer = 0;
     let totalTimeElapsed = 0;
     let setTimeElapsed = 0;
@@ -176,6 +192,7 @@
         if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         audioCtx.resume();
 
+        state.prep = parseInt(document.getElementById('inp-prep').value, 10);
         state.cadence = parseInt(document.getElementById('inp-cadence').value, 10);
         state.rest = parseInt(document.getElementById('inp-rest').value, 10);
         state.totalSets = parseInt(document.getElementById('inp-sets').value, 10);
@@ -191,6 +208,38 @@
             totalTimeElapsed++;
         }, 1000);
 
+        if (state.prep > 0) {
+            startPrep();
+        } else {
+            startSet();
+        }
+    }
+
+    function startPrep() {
+        showScreen('screen-prep');
+        prepTimer = state.prep;
+        document.getElementById('disp-prep-countdown').innerText = prepTimer;
+        
+        clearInterval(timerInterval);
+        timerInterval = setInterval(prepTick, 1000);
+    }
+
+    function prepTick() {
+        prepTimer--;
+        document.getElementById('disp-prep-countdown').innerText = prepTimer;
+        
+        if (prepTimer <= 3 && prepTimer > 0) {
+            if (state.beepWait) playTone(400, 0.1, 'sine');
+        }
+        
+        if (prepTimer <= 0) {
+            clearInterval(timerInterval);
+            startSet();
+        }
+    }
+
+    function skipPrep() {
+        clearInterval(timerInterval);
         startSet();
     }
 
